@@ -23,7 +23,7 @@ const uuidV4 = require('uuid/v4');
 const Entities = require('html-entities').XmlEntities;
 const decoder = new Entities();
 const redis = require('redis');
-const redisClient = '';
+let redisClient = '';
 
 module.exports = function (apiaiToken, redisPort = '6379', redisHost = '127.0.0.1') {
 
