@@ -22,8 +22,15 @@ const apiai = require('apiai');
 const uuidV4 = require('uuid/v4');
 const Entities = require('html-entities').XmlEntities;
 const decoder = new Entities();
+const redis = require('redis');
+const redisClient = '';
 
-module.exports = function (apiaiToken) {
+module.exports = function (apiaiToken, redisPort = '6379', redisHost = '127.0.0.1') {
+
+    if (!redisClient) {
+        redisClient = redis.createClient(redisPort, redisHost);
+    }
+
     return createApiAiProcessing(apiaiToken);
 };
 
@@ -65,77 +72,84 @@ function createApiAiProcessing(token) {
 
 
     worker.process = function (message, bot) {
-        try {
+        redisClient.hgetall("sessionIds", function(err, sessions) {
+            worker.sessionIds = sessions || {};
 
-            if (isDefined(message.text)) {
-                let userId = message.user;
+            try {
 
-                let requestText = decoder.decode(message.text);
-                requestText = requestText.replace("’", "'");
+                if (isDefined(message.text)) {
+                    let userId = message.user;
 
-                if (isDefined(bot.identity) && isDefined(bot.identity.id)) {
-                    // it seems it is Slack
+                    let requestText = decoder.decode(message.text);
+                    requestText = requestText.replace("’", "'");
 
-                    if (message.user == bot.identity.id) {
-                        // message from bot can be skipped
-                        return;
-                    }
+                    if (isDefined(bot.identity) && isDefined(bot.identity.id)) {
+                        // it seems it is Slack
 
-                    if (message.text.indexOf("<@U") == 0 && message.text.indexOf(bot.identity.id) == -1) {
-                        // skip other users direct mentions
-                        return;
-                    }
-
-                    let botId = '<@' + bot.identity.id + '>';
-                    if (requestText.indexOf(botId) > -1) {
-                        requestText = requestText.replace(botId, '');
-                    }
-
-                    userId = message.channel;
-                }
-
-                if (!(userId in worker.sessionIds)) {
-                    worker.sessionIds[userId] = uuidV4();
-                }
-
-                let request = worker.apiaiService.textRequest(requestText,
-                    {
-                        sessionId: worker.sessionIds[userId],
-                        originalRequest: {
-                            data: message,
-                            source: "api-ai-botkit"
+                        if (message.user == bot.identity.id) {
+                            // message from bot can be skipped
+                            return;
                         }
-                    });
 
-                request.on('response', (response) => {
+                        if (message.text.indexOf("<@U") == 0 && message.text.indexOf(bot.identity.id) == -1) {
+                            // skip other users direct mentions
+                            return;
+                        }
 
-                    worker.allCallback.forEach((callback) => {
-                        callback(message, response, bot);
-                    });
+                        let botId = '<@' + bot.identity.id + '>';
+                        if (requestText.indexOf(botId) > -1) {
+                            requestText = requestText.replace(botId, '');
+                        }
 
-                    if (isDefined(response.result)) {
-                        let action = response.result.action;
+                        userId = message.channel;
+                    }
 
-                        if (isDefined(action)) {
-                            if (worker.actionCallbacks[action]) {
-                                worker.actionCallbacks[action].forEach((callback) => {
-                                    callback(message, response, bot);
-                                });
+
+                    if (!(userId in worker.sessionIds)) {
+                        const sessionId = uuidV4();
+                        redisClient.hset("sessionIds", userId, sessionId);
+                        worker.sessionIds[userId] = uuidV4();
+                    }
+
+                    let request = worker.apiaiService.textRequest(requestText,
+                        {
+                            sessionId: worker.sessionIds[userId],
+                            originalRequest: {
+                                data: message,
+                                source: "api-ai-botkit"
+                            }
+                        });
+
+                    request.on('response', (response) => {
+
+                        worker.allCallback.forEach((callback) => {
+                            callback(message, response, bot);
+                        });
+
+                        if (isDefined(response.result)) {
+                            let action = response.result.action;
+
+                            if (isDefined(action)) {
+                                if (worker.actionCallbacks[action]) {
+                                    worker.actionCallbacks[action].forEach((callback) => {
+                                        callback(message, response, bot);
+                                    });
+                                }
                             }
                         }
-                    }
-                });
+                    });
 
-                request.on('error', (error) => {
-                    console.error(error);
-                });
+                    request.on('error', (error) => {
+                        console.error(error);
+                    });
 
-                request.end();
+                    request.end();
+                }
+
+            } catch (err) {
+                console.error(err);
             }
-
-        } catch (err) {
-            console.error(err);
-        }
+        });
     };
 
     return worker;
