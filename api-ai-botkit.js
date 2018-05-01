@@ -108,7 +108,7 @@ function createApiAiProcessing(token) {
                     if (!(userId in worker.sessionIds)) {
                         const sessionId = uuidV4();
                         redisClient.hset("sessionIds", userId, sessionId);
-                        worker.sessionIds[userId] = uuidV4();
+                        worker.sessionIds[userId] = sessionId;
                     }
 
                     let request = worker.apiaiService.textRequest(requestText,
